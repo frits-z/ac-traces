@@ -6,3 +6,6 @@ gimpprojects/
 
 # Test notebooks
 *.ipynb
+
+
+*.pyc

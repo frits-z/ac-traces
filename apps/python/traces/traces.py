@@ -23,6 +23,12 @@ os.environ['PATH'] = os.environ['PATH'] + ";."
 
 from lib.sim_info import info
 
+from lib.ac_gl_utils import Point
+from lib.ac_gl_utils import Line
+from lib.ac_gl_utils import Triangle
+from lib.ac_gl_utils import Quad
+
+
 BASE_DIR = "apps/python/traces/"
 CONFIG_REL_PATH = "config.ini"
 config_file_path = BASE_DIR + CONFIG_REL_PATH
@@ -343,7 +349,7 @@ for trace in my_traces_list:
 
 class Trace:
     """Trace Object..."""
-    def __init__(self, time_window, sample_rate, app_height, app_padding, color):
+    def __init__(self, time_window, sample_rate, color):
         """Initialize Class
 
         Args:
@@ -352,19 +358,22 @@ class Trace:
         # Initialize double ended queue...
         self.time_window = time_window
         self.sample_rate = sample_rate
-        self.window_size = self.time_window * self.sample_rate
-        self.data = deque([0] * self.window_size, self.window_size)
+        self.sample_size = self.time_window * self.sample_rate
+        self.data = deque([0] * self.sample_size, self.sample_size)
 
         self.color = color
 
-        self.app_height = app_height
-        self.app_padding = app_padding
-        self.origin = self.app_height * self.app_padding
+        self.graph_origin = Point(
+            cfg.app_height * cfg.app_padding,
+            cfg.app_height * (1- cfg.app_padding))
+        self.graph_height = cfg.app_height * (1 - 2 * cfg.app_padding)
+        self.graph_width = cfg.app_height * 2.5
+        self.trace_width = 1
 
         self.update_timer = 0
         self.update_timer_period = 1 / self.sample_rate
 
-        # Calc fill render_queue with a list of quads, which are a list of verts.
+        # Calc fill render_queue with a list of quads, which are a list of points.
         self.render_queue = []
 
     def update(self, deltaT, new_data_point):
@@ -381,10 +390,128 @@ class Trace:
                 pass
             else:
                 # If sim time multiplier is negative, clear traces to empty defaults
-                self.data.extend([0] * self.window_size)
+                self.data.extend([0] * self.sample_size)
 
-        # Rest of function... calculate traces quads.
+            # Start with clear raw render queue
+            self.render_queue_raw = []
+
+            p_new = Point(0,0)
+
+            # Iterate over data deque
+            for i, val in enumerate(self.data):
+                # Lag points
+                p_lag = p_new.copy()
+
+                p_new.x = (self.graph_origin.x 
+                           + (self.graph_width * (i + 1) / self.sample_size))
+                p_new.y = (self.graph_origin.y
+                           - (val * self.graph_height))
+
+                # Calc square for point p_new with a w,h of 2 * trace_width
+                # And add to render queue list
+                p1 = Point(p_new.x - self.trace_width,
+                           p_new.y - self.trace_width)
+                p2 = Point(p_new.x + self.trace_width,
+                           p_new.y - self.trace_width)
+                p3 = Point(p_new.x + self.trace_width,
+                           p_new.y + self.trace_width)
+                p4 = Point(p_new.x - self.trace_width,
+                           p_new.y + self.trace_width)
+                square = Quad(p1.copy(), p2.copy(), p3.copy(), p4.copy())
+
+                self.render_queue_raw.append(square.copy())
+
+                if i == 0:
+                    pass
+                elif val > trace[i-1]:
+                    # If new datapoint is higher than previous
+                    p1 = Point(p_lag.x - self.trace_width,
+                               p_lag.y - self.trace_width)
+                    p2 = Point(p_new.x - self.trace_width,
+                               p_new.y - self.trace_width)
+                    p3 = Point(p_new.x + self.trace_width,
+                               p_new.y + self.trace_width)
+                    p4 = Point(p_lag.x + self.trace_width,
+                               p_lag.y + self.trace_width)
+                    # Make connecting quad between squares... add to render queue
+                    conn_quad = Quad(p1, p2, p3, p4)
+                    self.render_queue_raw.append(conn_quad.copy())
+                else:
+                    p1 = Point(p_lag.x + self.trace_width,
+                               p_lag.y - self.trace_width)
+                    p2 = Point(p_new.x + self.trace_width,
+                               p_new.y - self.trace_width)
+                    p3 = Point(p_new.x - self.trace_width,
+                               p_new.y + self.trace_width)
+                    p4 = Point(p_lag.x - self.trace_width,
+                               p_lag.y + self.trace_width)
+                    # Make connecting quad between squares... add to render queue
+                    conn_quad = Quad(p1, p2, p3, p4)
+                    self.render_queue_raw.append(conn_quad.copy())
+
+            # Once building the raw render queue has completed,
+            # it replaces the actual render queue.
+            self.render_queue = self.render_queue_raw
+
+
+
+def build_line_render_queue(points, thickness):
+    """Build list of quads render queue for line with specified thickness.
     
+    Args:
+        points (list[obj:Point]): List of Point objects
+        thickness (float): Line thickness in pixels
+
+    Return:
+        list[obj:Quad]: list of Quad objects
+    """
+    half_width = thickness / 2
+
+    # Initialize render queue
+    render_queue = []
+
+    for i, p in enumerate(points):
+        # Make a square
+        p1 = Point(p[i].x - half_width,
+                   p[i].y - half_width)
+        p2 = Point(p[i].x + half_width,
+                   p[i].y - half_width)
+        p3 = Point(p[i].x + half_width,
+                   p[i].y + half_width)
+        p4 = Point(p[i].x - half_width,
+                   p[i].y + half_width)
+        square = Quad(p1, p2, p3, p4)
+        render_queue.append(square.copy())
+        
+        if i == 0:
+            pass
+        elif (p[i].x > p[i-1].x) == (p[i].y > p[i-1].y):
+            # If x and y are both greater or smaller than lag x and y
+            p1 = Point(p[i-1].x + half_width,
+                       p[i-1].y - half_width)
+            p2 = Point(p[i].x + half_width,
+                       p[i].y - half_width)
+            p3 = Point(p[i].x - half_width,
+                       p[i].y + half_width)
+            p4 = Point(p[i-1].x - half_width,
+                       p[i-1].y + half_width)
+            conn_quad = Quad(p1, p2, p3, p4)
+            render_queue.append(conn_quad.copy())
+        else:
+            p1 = Point(p[i-1].x - half_width,
+                       p[i-1].y - half_width)
+            p2 = Point(p[i].x - half_width,
+                       p[i].y - half_width)
+            p3 = Point(p[i].x + half_width,
+                       p[i].y + half_width)
+            p4 = Point(p[i-1].x + half_width,
+                       p[i-1].y + half_width)
+            conn_quad = Quad(p1, p2, p3, p4)
+            render_queue.append(conn_quad.copy())
+
+    return render_queue
+
+
 
 class PedalBar:
     """Pedal bar..."""
@@ -622,16 +749,12 @@ def set_color_legacy(rgba):
     ac.glColor4f(rgba['r'], rgba['g'], rgba['b'], rgba['a'])
 
 
-
-    def set_color(rgba)
+def set_color(rgba):
     """Apply RGBA color for GL drawing.
 
     Agrs:
         rgba (tuple): r,g,b,a on a 0-1 scale.
     """
     ac.glColor4f(rgba[0], rgba[1], rgba[2], rgba[3])
-
-
-    # Geometry classes used as building blocks for the OpenGL rendering of vector graphics in Assetto Corsa.
 
 
