@@ -21,7 +21,13 @@ else:
 sys.path.insert(0, sysdir)
 os.environ['PATH'] = os.environ['PATH'] + ";."
 
-from traces_lib.sim_info import info
+from lib.sim_info import info
+
+BASE_DIR = "apps/python/traces/"
+CONFIG_REL_PATH = "config.ini"
+config_file_path = BASE_DIR + CONFIG_REL_PATH
+
+
 
 # Start configparser
 config = configparser.ConfigParser()
@@ -113,14 +119,12 @@ colors = {
 
 
 
-# # Colors
-# colors = {
-#     'throttle': {'r': 0.16, 'g': 1, 'b': 0, 'a': 1},
-#     'brake': {'r': 1, 'g': 0.16, 'b': 0, 'a': 1},
-#     'clutch': {'r': 0.16, 'g': 1, 'b': 1, 'a': 1},
-#     'ffb': {'r': 0.35, 'g': 0.35, 'b': 0.35, 'a': 1},
-#     'steer': {'r': 1, 'g': 0.8, 'b': 0, 'a': 1}
-# }
+# Init objects
+cfg = None
+ac_data = None
+
+
+
 
 
 
@@ -165,6 +169,14 @@ def acMain(ac_version):
 
 
     wheel_ring = ac.newTexture("apps/python/traces/img/wheel_ring_texture.png")
+
+
+    # Config should be first thing to load in AcMain.
+    global cfg
+    cfg = Config(config_file_path)
+
+    global ac_data
+    ac_data = ACData()
 
 
 def acUpdate(deltaT):
@@ -235,6 +247,159 @@ def acUpdate(deltaT):
     ac.setText(labels['time'], "{} B".format(ac_data['brake']))
 
 
+class Config:
+    """Handling of config information"""
+    def __init__(self, file_path):
+        """Set defaults and load config
+
+        Args:
+            file_path (str): config file path relative to Assetto Corsa
+                installation root folder.
+        """
+        ac.log("Traces: Init Config") # TEMP
+        self.file_path = file_path
+
+        # Set app attributes that are non-configurable by user, therefore
+        # don't appear in config file.
+        self.app_name = "Traces"
+        self.app_aspect_ratio = 4.27
+        self.app_padding = 0.1 # Fraction of app height
+
+        # Call load method
+        self.load()
+
+    def load(self):
+        """Initialize config parser and load config"""
+        ac.log("Traces: Load Config") # TEMP
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(self.file_path)
+            self.app_height = parser.getint('GENERAL', 'app_height')
+            self.time_window = parser.getint('GENERAL', 'time_window')
+            self.traces_sample_rate = parser.getint('GENERAL', 'traces_sample_rate')
+            self.use_kmh = parser.getboolean('GENERAL', 'use_kmh')
+            # TODO add all other config items
+
+        except Exception as e:
+            ac.log("{app_name} - Error loading config:\n{error}".format(app_name=self.app_name, error=e))
+            ac.log("{app_name} - Using config fallback defaults".format(app_name=self.app_name))
+            self.fallback()
+
+    def fallback(self):
+        # Defaults for adjustable items
+        self.app_height = 500
+        pass
+
+
+class ACData:
+    """Handling ac data storing updating etc"""
+    def __init__(self, use_kmh):
+        ac.log("Traces: Init ACData") # TEMP
+        self.speed = 0
+        self.throttle = 0
+        self.brake = 0
+        self.clutch = 0
+        self.steering = 0
+        self.gear = 0
+        self.ffb = 0
+        self.focused_car = 0
+        self.replay_time_multiplier = 1
+
+        self.use_kmh = use_kmh
+
+        # Timer
+        self.timer_60_hz = 0
+        self.period_60_hz = 1 / 60
+
+    def update(self, deltaT):
+        # Update timer
+        self.timer_60_hz += deltaT
+
+        if self.timer_60_hz > self.period_60_hz:
+            self.timer_60_hz -= self.period_60_hz
+
+            self.throttle = ac.getCarState(self.focused_car, acsys.CS.Gas)
+            self.brake = ac.getCarState(self.focused_car, acsys.CS.Brake)
+            self.clutch = 1 - ac.getCarState(self.focused_car, acsys.CS.Clutch)
+            self.ffb = ac.getCarState(self.focused_car, acsys.CS.LastFF)
+            self.steering = ac.getCarState(self.focused_car, acsys.CS.Steer) * math.pi / 180
+            self.gear = ac.getCarState(self.focused_car, acsys.CS.Gear)
+
+            # Add logic from cfg to select between MPH and KM/H
+            if self.use_kmh:
+                self.speed = ac.getCarState(self.focused_car, acsys.CS.SpeedKMH)
+            else:
+                self.speed = ac.getCarState(self.focused_car, acsys.CS.SpeedMPH)
+
+            self.replay_time_multiplier = info.graphics.replayTimeMultiplier
+
+
+# Example of how it should work...
+my_traces_list = [[throttle_obj, data.throttle], 'brake', 'steering']
+
+for trace in my_traces_list:
+    trace.update(...)
+
+
+class Trace:
+    """Trace Object..."""
+    def __init__(self, time_window, sample_rate, app_height, app_padding, color):
+        """Initialize Class
+
+        Args:
+            color (tuple): r,g,b,a on 0 to 1 scale
+        """
+        # Initialize double ended queue...
+        self.time_window = time_window
+        self.sample_rate = sample_rate
+        self.window_size = self.time_window * self.sample_rate
+        self.data = deque([0] * self.window_size, self.window_size)
+
+        self.color = color
+
+        self.app_height = app_height
+        self.app_padding = app_padding
+        self.origin = self.app_height * self.app_padding
+
+        self.update_timer = 0
+        self.update_timer_period = 1 / self.sample_rate
+
+        # Calc fill render_queue with a list of quads, which are a list of verts.
+        self.render_queue = []
+
+    def update(self, deltaT, new_data_point):
+        self.update_timer += deltaT
+
+        if self.update_timer > self.update_timer_period:
+            self.update_timer -= self.update_timer_period
+
+            if ac_data.replay_time_multiplier > 0:
+                # Update traces if sim time multiplier is positive
+                self.data.append(new_data_point)
+            elif ac_data.replay_time_multiplier == 0:
+                # If sim time is paused, dont update traces, freeze.
+                pass
+            else:
+                # If sim time multiplier is negative, clear traces to empty defaults
+                self.data.extend([0] * self.window_size)
+
+        # Rest of function... calculate traces quads.
+    
+
+class PedalBar:
+    """Pedal bar..."""
+    pass
+
+
+class Colors:
+    """Class-level attributes with RGBA color tuples"""
+    green = (0.16, 1, 0, 1)
+    red = (1, 0.16, 0 , 1)
+    blue = (0.16, 1, 1, 1)
+    grey = (0.35, 0.35, 0.35, 1)
+    yellow = (1, 0.8, 0, 1)
+
+
 # GL Drawing
 def onFormRender(deltaT):
     """Run every rendered frame of Assetto Corsa. """
@@ -281,7 +446,7 @@ def onFormRender(deltaT):
     draw_wheel_indicator(ac_data['steer'], colors['steer'])
 
 def draw_pedal_bar(x_origin, pedal_input, rgba):
-    set_color(rgba)
+    set_color_legacy(rgba)
     pedals_w = app_info['height'] * app_info['padding']
     pedals_h = - app_info['height'] * (1 - (app_info['padding'] * 2)) * pedal_input
     pedals_y = 450 * app_info['scale']
@@ -302,7 +467,7 @@ def draw_trace_legacy(trace, rgba, x_offset=0, y_offset=0):
     # calc render calls needed
     n_rendercalls = ceil(deque_length / MAX_LINES_PER_CALL)
 
-    set_color(rgba)
+    set_color_legacy(rgba)
 
     for call_n in range(n_rendercalls):
         # Start render call
@@ -340,7 +505,7 @@ def draw_trace(trace, rgba, width=1):
     windowheight = app_info['height'] * (1 - 2 * app_info['padding'])
     windowwidth = app_info['height'] * 2.5
 
-    set_color(rgba)
+    set_color_legacy(rgba)
 
     x_new = 0
     y_new = 0
@@ -396,7 +561,7 @@ def draw_trace(trace, rgba, width=1):
 
 
 def draw_wheel_indicator(angle, rgba):
-    set_color(rgba)
+    set_color_legacy(rgba)
 
     origin = {'x': 1935 * app_info['scale'],
               'y': 300 * app_info['scale']}
@@ -447,7 +612,7 @@ def polar_to_cartesian_coords(origin, radius, phi):
     return {'x': cartesian_x, 'y': cartesian_y}
 
 
-def set_color(rgba):
+def set_color_legacy(rgba):
     """Set RGBA color for GL drawing.
 
     Args:
@@ -455,3 +620,18 @@ def set_color(rgba):
 
     """
     ac.glColor4f(rgba['r'], rgba['g'], rgba['b'], rgba['a'])
+
+
+
+    def set_color(rgba)
+    """Apply RGBA color for GL drawing.
+
+    Agrs:
+        rgba (tuple): r,g,b,a on a 0-1 scale.
+    """
+    ac.glColor4f(rgba[0], rgba[1], rgba[2], rgba[3])
+
+
+    # Geometry classes used as building blocks for the OpenGL rendering of vector graphics in Assetto Corsa.
+
+
