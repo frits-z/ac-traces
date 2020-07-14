@@ -46,6 +46,8 @@ clutch_trace = None
 
 INITIALIZED = False
 
+timer1 = 0
+
 def acMain(ac_version):
     """Run upon startup of Assetto Corsa. """
     # Config should be first thing to load in AcMain.
@@ -58,6 +60,7 @@ def acMain(ac_version):
     # list of trace objects
     global traces_list
     global throttle_trace, brake_trace, clutch_trace
+    # TODO ORDER THEM IN REVERSE ORDER OF IMPORTANCE. LAST ONE IS DRAWN ON TOP
     # Initialize trace objects
     if cfg.display_throttle:
         throttle_trace = Trace(Colors.green)
@@ -88,17 +91,20 @@ def acUpdate(deltaT):
     # Update data
     ac_data.update(deltaT)
 
-    # # Update trace objects
-    # for trace in traces_list:
-    #     trace[0].update(deltaT, trace[1])
+    global timer1
 
-    global throttle_trace, brake_trace, clutch_trace
-    if cfg.display_throttle:
-        throttle_trace.update(deltaT, ac_data.throttle)
-    if cfg.display_brake:
-        brake_trace.update(deltaT, ac_data.brake)
-    if cfg.display_clutch:
-        clutch_trace.update(deltaT, ac_data.clutch)
+    timer1 += deltaT
+    if timer1 > (1 / cfg.traces_sample_rate):
+        timer1 -= (1 / cfg.traces_sample_rate)
+
+        global throttle_trace, brake_trace, clutch_trace
+        if cfg.display_throttle:
+            throttle_trace.update2(ac_data.throttle)
+        if cfg.display_brake:
+            brake_trace.update2(ac_data.brake)
+        if cfg.display_clutch:
+            clutch_trace.update2(ac_data.clutch)
+
 
 
 # GL Drawing
@@ -182,10 +188,11 @@ class Renderer:
             set_color(trace.color)
             for quad in trace.render_queue:
                 ac.glBegin(acsys.GL.Quads)
-                for point in quad.points:
-                    ac.glVertex2f(point.x, point.y)
+                ac.glVertex2f(quad.points[0].x, quad.points[0].y)
+                ac.glVertex2f(quad.points[1].x, quad.points[1].y)
+                ac.glVertex2f(quad.points[2].x, quad.points[2].y)
+                ac.glVertex2f(quad.points[3].x, quad.points[3].y)
                 ac.glEnd()
-
 
 class ACData:
     """Handling ac data storing updating etc"""
@@ -245,10 +252,11 @@ class Trace:
         self.time_window = cfg.time_window
         self.sample_rate = cfg.traces_sample_rate
         self.sample_size = self.time_window * self.sample_rate
-        self.data = deque([0] * self.sample_size, self.sample_size)
+        # self.data = deque([0] * self.sample_size, self.sample_size)
 
         self.color = color
-        self.thickness = 1
+        self.thickness = 3
+        self.half_thickness = self.thickness / 2
 
         self.graph_origin = Point(
             cfg.app_height * cfg.app_padding,
@@ -261,7 +269,13 @@ class Trace:
         self.update_timer_period = 1 / self.sample_rate
 
         # Calc fill render_queue with a list of quads, which are a list of points.
-        self.render_queue = []
+        # self.render_queue = []
+        # 2*size - 1 because n=size points and n=size-1 lines between points
+
+        #USE CLEAR METHODS!!!
+        self.render_queue = deque(maxlen=(2 * self.sample_size - 1))
+
+        self.points = deque(maxlen=2)
 
     def update(self, deltaT, new_data_point):
         # Update timer
@@ -292,6 +306,87 @@ class Trace:
 
             self._render_queue = build_line_render_queue(self.points, self.thickness)
             self.render_queue = self._render_queue
+
+    def update2(self, data_point):
+        # ALTERNATIVE ATTEMPT, MORE EFFICIENT
+        if ac_data.replay_time_multiplier > 0:
+            # Update traces if sim time multiplier is positive
+
+            # Offset all current points by one
+            for point in self.points:
+                point.x -= self.graph_width / self.sample_size
+
+            # Move all quads one slot to the left. 
+            # Actually.... renderqueue is really the only place I need a
+            # deque with long length...
+            # I don't need a big one for the points or data. For the data only need two.
+            # ALSO!!!!! Using deques is actually smart for getting lag variables
+            for quad in self.render_queue:
+                quad.points[0].x -= self.graph_width / self.sample_size
+                quad.points[1].x -= self.graph_width / self.sample_size
+                quad.points[2].x -= self.graph_width / self.sample_size
+                quad.points[3].x -= self.graph_width / self.sample_size
+
+            # Add new point
+            p = Point(self.graph_origin.x + self.graph_width,
+                    self.graph_origin.y
+                    - (data_point * self.graph_height))
+            self.points.append(p.copy())
+
+            # Make a square
+            p1 = Point(p.x - self.half_thickness,
+                       p.y - self.half_thickness)
+            p2 = Point(p.x + self.half_thickness,
+                       p.y - self.half_thickness)
+            p3 = Point(p.x + self.half_thickness,
+                       p.y + self.half_thickness)
+            p4 = Point(p.x - self.half_thickness,
+                       p.y + self.half_thickness)
+            square = Quad(p1, p2, p3, p4)
+            self.render_queue.append(square.copy())
+
+            p_lag = self.points[0]
+            # Make connecting quad if previous point exists
+            # Checked by seeing if points deque is length of two...
+            if len(self.points) != 2:
+                pass
+            elif (p.x > p_lag.x) == (p.y > p_lag.y):
+                # If x and y are both greater or smaller than lag x and y
+                p1 = Point(p_lag.x + self.half_thickness,
+                           p_lag.y - self.half_thickness)
+                p2 = Point(p.x + self.half_thickness,
+                           p.y - self.half_thickness)
+                p3 = Point(p.x - self.half_thickness,
+                           p.y + self.half_thickness)
+                p4 = Point(p_lag.x - self.half_thickness,
+                           p_lag.y + self.half_thickness)
+                conn_quad = Quad(p1, p2, p3, p4)
+                self.render_queue.append(conn_quad.copy())
+            else:
+                p1 = Point(p_lag.x - self.half_thickness,
+                           p_lag.y - self.half_thickness)
+                p2 = Point(p.x - self.half_thickness,
+                           p.y - self.half_thickness)
+                p3 = Point(p.x + self.half_thickness,
+                           p.y + self.half_thickness)
+                p4 = Point(p_lag.x + self.half_thickness,
+                           p_lag.y + self.half_thickness)
+                conn_quad = Quad(p1, p2, p3, p4)
+                self.render_queue.append(conn_quad.copy())
+
+        elif ac_data.replay_time_multiplier == 0:
+            # If sim time is paused, dont update traces, freeze.
+            pass
+        else:
+            # If sim time multiplier is negative, clear traces to empty defaults
+            # SHOULD JUST CLEAR RENDER QUEUE!!!
+            self.points = deque(maxlen=2)
+            self.render_queue = deque(maxlen=(2 * self.sample_size - 1))
+            
+
+
+
+        
 
 def build_line_render_queue(points, thickness):
     """Build list of quads render queue for line with specified thickness.
