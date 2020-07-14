@@ -40,6 +40,11 @@ ac_data = None
 app_window = None
 
 traces_list = []
+throttle_trace = None
+brake_trace = None
+clutch_trace = None
+
+INITIALIZED = False
 
 def acMain(ac_version):
     """Run upon startup of Assetto Corsa. """
@@ -52,31 +57,49 @@ def acMain(ac_version):
 
     # list of trace objects
     global traces_list
+    global throttle_trace, brake_trace, clutch_trace
     # Initialize trace objects
     if cfg.display_throttle:
         throttle_trace = Trace(Colors.green)
-        traces_list.append([throttle_trace, ac_data.throttle])
+        traces_list.append(throttle_trace)
     if cfg.display_brake:
         brake_trace = Trace(Colors.red)
-        traces_list.append([brake_trace, ac_data.brake])
+        traces_list.append(brake_trace)
     if cfg.display_clutch:
         clutch_trace = Trace(Colors.blue)
-        traces_list.append([clutch_trace, ac_data.clutch])
+        traces_list.append(clutch_trace)
     # Add steering...
 
     # Set up app window
     global app_window
     app_window = Renderer()
 
+    global INITIALIZED
+    INITIALIZED = True
+
 
 def acUpdate(deltaT):
     """Run every physics tick of Assetto Corsa. """
+    if not INITIALIZED:
+        ac.log("Traces: Not yet initialized. Returning...")
+        return
+    global ac_data
+    global traces_list
     # Update data
     ac_data.update(deltaT)
 
-    # Update trace objects
-    for trace in traces_list:
-        trace[0].update(deltaT, trace[1])
+    # # Update trace objects
+    # for trace in traces_list:
+    #     trace[0].update(deltaT, trace[1])
+
+    global throttle_trace, brake_trace, clutch_trace
+    if cfg.display_throttle:
+        throttle_trace.update(deltaT, ac_data.throttle)
+    if cfg.display_brake:
+        brake_trace.update(deltaT, ac_data.brake)
+    if cfg.display_clutch:
+        clutch_trace.update(deltaT, ac_data.clutch)
+
 
 # GL Drawing
 def app_render(deltaT):
@@ -156,10 +179,10 @@ class Renderer:
 
         # ik denk dat dit werkt?
         for trace in traces_list:
-            set_color(trace[0].color)
-            for quad in trace[0].render_queue:
+            set_color(trace.color)
+            for quad in trace.render_queue:
                 ac.glBegin(acsys.GL.Quads)
-                for point in quad:
+                for point in quad.points:
                     ac.glVertex2f(point.x, point.y)
                 ac.glEnd()
 
@@ -190,6 +213,8 @@ class ACData:
 
         if self.timer_60_hz > self.period_60_hz:
             self.timer_60_hz -= self.period_60_hz
+
+            self.focused_car = ac.getFocusedCar()
 
             self.throttle = ac.getCarState(self.focused_car, acsys.CS.Gas)
             self.brake = ac.getCarState(self.focused_car, acsys.CS.Brake)
@@ -223,7 +248,7 @@ class Trace:
         self.data = deque([0] * self.sample_size, self.sample_size)
 
         self.color = color
-        self.thickness = 2
+        self.thickness = 1
 
         self.graph_origin = Point(
             cfg.app_height * cfg.app_padding,
@@ -265,8 +290,8 @@ class Trace:
 
                 self.points.append(p.copy())
 
-            self.render_queue = build_line_render_queue(self.points, self.thickness)
-
+            self._render_queue = build_line_render_queue(self.points, self.thickness)
+            self.render_queue = self._render_queue
 
 def build_line_render_queue(points, thickness):
     """Build list of quads render queue for line with specified thickness.
@@ -285,40 +310,41 @@ def build_line_render_queue(points, thickness):
 
     for i, p in enumerate(points):
         # Make a square
-        p1 = Point(p[i].x - half_width,
-                   p[i].y - half_width)
-        p2 = Point(p[i].x + half_width,
-                   p[i].y - half_width)
-        p3 = Point(p[i].x + half_width,
-                   p[i].y + half_width)
-        p4 = Point(p[i].x - half_width,
-                   p[i].y + half_width)
+        p1 = Point(p.x - half_width,
+                   p.y - half_width)
+        p2 = Point(p.x + half_width,
+                   p.y - half_width)
+        p3 = Point(p.x + half_width,
+                   p.y + half_width)
+        p4 = Point(p.x - half_width,
+                   p.y + half_width)
         square = Quad(p1, p2, p3, p4)
         render_queue.append(square.copy())
         
+        p_lag = points[i-1]
         if i == 0:
             pass
-        elif (p[i].x > p[i-1].x) == (p[i].y > p[i-1].y):
+        elif (p.x > p_lag.x) == (p.y > p_lag.y):
             # If x and y are both greater or smaller than lag x and y
-            p1 = Point(p[i-1].x + half_width,
-                       p[i-1].y - half_width)
-            p2 = Point(p[i].x + half_width,
-                       p[i].y - half_width)
-            p3 = Point(p[i].x - half_width,
-                       p[i].y + half_width)
-            p4 = Point(p[i-1].x - half_width,
-                       p[i-1].y + half_width)
+            p1 = Point(p_lag.x + half_width,
+                       p_lag.y - half_width)
+            p2 = Point(p.x + half_width,
+                       p.y - half_width)
+            p3 = Point(p.x - half_width,
+                       p.y + half_width)
+            p4 = Point(p_lag.x - half_width,
+                       p_lag.y + half_width)
             conn_quad = Quad(p1, p2, p3, p4)
             render_queue.append(conn_quad.copy())
         else:
-            p1 = Point(p[i-1].x - half_width,
-                       p[i-1].y - half_width)
-            p2 = Point(p[i].x - half_width,
-                       p[i].y - half_width)
-            p3 = Point(p[i].x + half_width,
-                       p[i].y + half_width)
-            p4 = Point(p[i-1].x + half_width,
-                       p[i-1].y + half_width)
+            p1 = Point(p_lag.x - half_width,
+                       p_lag.y - half_width)
+            p2 = Point(p.x - half_width,
+                       p.y - half_width)
+            p3 = Point(p.x + half_width,
+                       p.y + half_width)
+            p4 = Point(p_lag.x + half_width,
+                       p_lag.y + half_width)
             conn_quad = Quad(p1, p2, p3, p4)
             render_queue.append(conn_quad.copy())
 
