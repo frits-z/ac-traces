@@ -341,10 +341,10 @@ class Triangle:
             points._rotate(c, s, cor)
 
     def copy(self):
-    """Return a copy of object."""
+        """Return a copy of object."""
         return Triangle(self.points[0].copy(),
-                    self.points[1].copy(),
-                    self.points[2].copy())
+                        self.points[1].copy(),
+                        self.points[2].copy())
 
 
 class Quad:
