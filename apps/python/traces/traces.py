@@ -43,10 +43,20 @@ traces_list = []
 throttle_trace = None
 brake_trace = None
 clutch_trace = None
-
-INITIALIZED = False
+steering_trace = None
 
 timer1 = 0
+timer2 = 0
+
+throttle_bar = None
+brake_bar = None
+clutch_bar = None
+ffb_bar = None
+
+wheel_indicator = None
+
+INITIALIZED = False 
+
 
 def acMain(ac_version):
     """Run upon startup of Assetto Corsa. """
@@ -73,6 +83,16 @@ def acMain(ac_version):
         traces_list.append(clutch_trace)
     # Add steering...
 
+    # Initialize pedal bars.
+    global throttle_bar, brake_bar, clutch_bar, ffb_bar
+    throttle_bar = PedalBar(1555, Colors.green)
+    brake_bar = PedalBar(1480, Colors.red)
+    clutch_bar = PedalBar(1405, Colors.blue)
+    ffb_bar = PedalBar(1630, Colors.grey)
+
+    global wheel_indicator
+    wheel_indicator = SteeringWheel(Colors.yellow)
+
     # Set up app window
     global app_window
     app_window = Renderer()
@@ -91,13 +111,15 @@ def acUpdate(deltaT):
     # Update data
     ac_data.update(deltaT)
 
-    global timer1
+    global timer1, timer2
 
     timer1 += deltaT
+    timer2 += deltaT
     if timer1 > (1 / cfg.traces_sample_rate):
         timer1 -= (1 / cfg.traces_sample_rate)
 
         global throttle_trace, brake_trace, clutch_trace
+        # NOT SURE IF GLOBAL THING IS NEEDED ON THIS...
         if cfg.display_throttle:
             throttle_trace.update2(ac_data.throttle)
         if cfg.display_brake:
@@ -105,6 +127,10 @@ def acUpdate(deltaT):
         if cfg.display_clutch:
             clutch_trace.update2(ac_data.clutch)
 
+    if timer2 > (1 / 60):
+        timer2  -= 1 / 60
+        global wheel_indicator
+        wheel_indicator.update(ac_data.steering)
 
 
 # GL Drawing
@@ -156,7 +182,9 @@ class Config:
             ac.log("{app_name} - Using config fallback defaults".format(app_name=self.app_name))
             self.fallback()
 
+        # Generate attributes derived from config inputs
         self.app_width = self.app_height * self.app_aspect_ratio
+        self.app_scale = self.app_height / 500
 
     def fallback(self):
         # Defaults for adjustable items
@@ -184,6 +212,8 @@ class Renderer:
         ac.setBackgroundOpacity(self.id, 0)
 
         # ik denk dat dit werkt?
+        # Ik kan dit beter verpakken in het Trace object... 
+        # Dat maakt de implementatie van LightweightMode makkelijker.
         for trace in traces_list:
             set_color(trace.color)
             for quad in trace.render_queue:
@@ -193,6 +223,19 @@ class Renderer:
                 ac.glVertex2f(quad.points[2].x, quad.points[2].y)
                 ac.glVertex2f(quad.points[3].x, quad.points[3].y)
                 ac.glEnd()
+
+        # Draw pedal bars
+        throttle_bar.draw(ac_data.throttle)
+        brake_bar.draw(ac_data.brake)
+        clutch_bar.draw(ac_data.clutch)
+
+        if ac_data.ffb < 1:
+            ffb_bar.draw(ac_data.ffb)
+        else:
+            ffb_bar.draw(1, Colors.red)
+
+        wheel_indicator.draw()
+
 
 class ACData:
     """Handling ac data storing updating etc"""
@@ -277,6 +320,7 @@ class Trace:
 
         self.points = deque(maxlen=2)
 
+    # TODO DEPRECATED: This is the old and inefficient way of building the render queue.
     def update(self, deltaT, new_data_point):
         # Update timer
         self.update_timer += deltaT
@@ -384,10 +428,93 @@ class Trace:
             self.render_queue = deque(maxlen=(2 * self.sample_size - 1))
             
 
+class PedalBar:
+    """DOCSTRING HERE
+
+    """
+    def __init__(self, origin_x, color):
+        self.color = color
+        self.origin = Point(origin_x * cfg.app_scale,
+                            450 * cfg.app_scale)
+        self.width = cfg.app_height * cfg.app_padding
+        # Height will be multiplied by pedal input.
+        self.full_height = - cfg.app_height * (1- (cfg.app_padding * 2))
+
+    def draw(self, pedal_input, color_override=None):
+        if color_override is None:
+            set_color(self.color)
+        else:
+            set_color(color_override)
+
+        ac.glQuad(self.origin.x, 
+                  self.origin.y, 
+                  self.width, 
+                  self.full_height * pedal_input)
 
 
-        
+class SteeringWheel:
+    def __init__(self, color):
+        self.color = color
+        # Center of rotation?
+        self.origin = Point(1935 * cfg.app_scale,
+                            300 * cfg.app_scale)
+        self.outer_radius = 150 * cfg.app_scale
+        self.ratio_inner_outer_radius = 112 / 150
+        self.inner_radius = self.outer_radius * self.ratio_inner_outer_radius
 
+        # Build basic renderqueue... With update I will rotate the quads in renderqueue...
+        self.center_p_outer = Point(self.origin.x,
+                                 self.origin.y - self.outer_radius)
+        self.center_p_inner = Point(self.origin.x,
+                                 self.origin.y - self.inner_radius)
+
+        # Maybe build it up as a collection of lines...
+        self.start_line = Line(self.center_p_inner, self.center_p_outer)
+
+        self.line_list = []
+        self.base_quads = []
+        self.offsets = [-0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2]
+        for i, offset in enumerate(self.offsets):
+            line = self.start_line.copy()
+            line.rotate_rad(offset, self.origin)
+            self.line_list.append(line)
+
+            if i == 0:
+                pass
+            else:
+                line_lag = self.line_list[i-1]
+
+                p1 = Point(line.points[0].x, line.points[0].y)
+                p2 = Point(line.points[1].x, line.points[1].y)
+                p3 = Point(line_lag.points[1].x, line_lag.points[1].y)
+                p4 = Point(line_lag.points[0].x, line_lag.points[0].y)
+                quad = Quad(p1, p2, p3, p4)
+                self.base_quads.append(quad)
+
+        self.render_queue = []
+
+    def update(self, angle):
+        _render_queue = []
+
+        for quad in self.base_quads:
+            new_quad = quad.copy()
+            new_quad.rotate_rad(angle, self.origin)
+            _render_queue.append(new_quad)
+
+        self.render_queue = _render_queue
+
+    def draw(self):
+        set_color(self.color)
+        for quad in self.render_queue:
+            ac.glBegin(acsys.GL.Quads)
+            ac.glVertex2f(quad.points[0].x, quad.points[0].y)
+            ac.glVertex2f(quad.points[1].x, quad.points[1].y)
+            ac.glVertex2f(quad.points[2].x, quad.points[2].y)
+            ac.glVertex2f(quad.points[3].x, quad.points[3].y)
+            ac.glEnd()
+
+
+# TODO DEPRECATED
 def build_line_render_queue(points, thickness):
     """Build list of quads render queue for line with specified thickness.
     
