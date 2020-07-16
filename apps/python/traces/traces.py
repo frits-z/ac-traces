@@ -8,6 +8,8 @@ import math
 import configparser
 
 from collections import deque
+
+# TODO I dont use this anymore, I think. Need to double check.
 from math import ceil
 
 # Import Assetto Corsa shared memory library.
@@ -31,8 +33,9 @@ from lib.ac_gl_utils import Quad
 
 BASE_DIR = "apps/python/traces/"
 CONFIG_REL_PATH = "config.ini"
+DEFAULTS_REL_PATH = "config_defaults.ini"
 config_file_path = BASE_DIR + CONFIG_REL_PATH
-
+defaults_file_path = BASE_DIR + DEFAULTS_REL_PATH
 
 # Init objects
 cfg = None
@@ -62,7 +65,7 @@ def acMain(ac_version):
     """Run upon startup of Assetto Corsa."""
     # Config should be first thing to load in AcMain.
     global cfg
-    cfg = Config(config_file_path)
+    cfg = Config(config_file_path, defaults_file_path)
 
     # Initialize ac_data object
     global ac_data
@@ -149,18 +152,21 @@ def app_render(deltaT):
     """Run every rendered frame of Assetto Corsa. """    
     app_window.render(deltaT)
 
+# TODO acShutdown function. For Saving CFG.
+
 
 class Config:
     """Handling of config information"""
-    def __init__(self, file_path):
+    def __init__(self, cfg_file_path, defaults_file_path):
         """Set defaults and load config
 
         Args:
             file_path (str): config file path relative to Assetto Corsa
                 installation root folder.
         """
-        ac.log("Traces: Init Config") # TEMP
-        self.file_path = file_path
+        # TODO Docstrings
+        self.cfg_file_path = cfg_file_path
+        self.defaults_file_path = defaults_file_path
 
         # Set app attributes that are non-configurable by user, therefore
         # don't appear in config file.
@@ -169,38 +175,92 @@ class Config:
         self.app_padding = 0.1 # Fraction of app height
 
         # Call load method
+        self.update_cfg = False
         self.load()
 
     def load(self):
         """Initialize config parser and load config"""
-        ac.log("Traces: Load Config") # TEMP
-        parser = configparser.ConfigParser()
-        try:
-            parser.read(self.file_path)
-            self.app_height = parser.getint('GENERAL', 'app_height')
-            self.time_window = parser.getint('GENERAL', 'time_window')
-            self.traces_sample_rate = parser.getint('GENERAL', 'traces_sample_rate')
-            self.use_kmh = parser.getboolean('GENERAL', 'use_kmh')
+        # Load config file parser
+        self.cfg_parser = configparser.ConfigParser()
+        self.cfg_parser.read(self.cfg_file_path)
+        # Load config defaults file parser
+        self.defaults_parser = configparser.ConfigParser(inline_comment_prefixes=";")
+        self.defaults_parser.read(self.defaults_file_path)
 
-            self.display_throttle = parser.getboolean('TRACES', 'display_throttle')
-            self.display_brake = parser.getboolean('TRACES', 'display_brake')
-            self.display_clutch = parser.getboolean('TRACES','display_clutch')
-            self.display_steering = parser.getboolean('TRACES', 'display_steering')
-            self.traces_thickness = parser.getfloat('TRACES', 'thickness')
+        # Loop over sections in defaults. If any are missing in cfg, add them.
+        for section in self.defaults_parser.sections():
+            if not self.cfg_parser.has_section(section):
+                self.cfg_parser.add_section(section)
+                
 
-        except Exception as e:
-            ac.log("{app_name} - Error loading config:\n{error}".format(app_name=self.app_name, error=e))
-            ac.log("{app_name} - Using config fallback defaults".format(app_name=self.app_name))
-            self.fallback()
+        self.getint('GENERAL', 'app_height')
+        self.getbool('GENERAL', 'use_kmh')
+
+        self.getbool('TRACES', 'display_throttle')
+        self.getbool('TRACES', 'display_brake')
+        self.getbool('TRACES', 'display_clutch')
+        self.getbool('TRACES', 'display_steering')
+        self.getint('TRACES', 'trace_time_window')
+        self.getint('TRACES', 'trace_sample_rate')
+        self.getfloat('TRACES', 'trace_thickness')
+        self.getfloat('TRACES', 'trace_steering_cap')
+
+        # If update_cfg has been triggered (set to True), run save to update file.
+        if self.update_cfg:
+            self.save()
 
         # Generate attributes derived from config inputs
         self.app_width = self.app_height * self.app_aspect_ratio
         self.app_scale = self.app_height / 500
 
-    def fallback(self):
-        # Defaults for adjustable items
-        self.app_height = 500
-        pass
+
+    def save(self):
+        # TODO SAVE FUNCTION. CALL ON ACSHUTDOWN.
+        with open(self.cfg_file_path, 'w') as cfgfile:
+            self.cfg_parser.write(cfgfile)
+
+
+    def getfloat(self, section, option):
+        try:
+            value = self.cfg_parser.getfloat(section, option)
+        except:
+            value = self.defaults_parser.getfloat(section, option)
+            self.cfg_parser.set(section, option, str(value))
+            self.update_cfg = True
+        self.__setattr__(option, value)
+
+
+    def getbool(self, section, option):
+        try:
+            value = self.cfg_parser.getboolean(section, option)
+        except:
+            value = self.defaults_parser.getboolean(section, option)
+            self.cfg_parser.set(section, option, str(value))
+            self.update_cfg = True
+        self.__setattr__(option, value)
+
+
+    def getint(self, section, option):
+        try:
+            value = self.cfg_parser.getint(section, option)
+        except:
+            try:
+                value = int(self.cfg_parser.getfloat(section, option))
+            except:
+                value = self.defaults_parser.getint(section, option)
+            self.cfg_parser.set(section, option, str(value))
+            self.update_cfg = True
+        self.__setattr__(option, value)
+
+
+    def getstr(self, section, option):
+        try: 
+            value = self.cfg_parser.get(section, option)
+        except:
+            value = self.defaults_parser.get(section, option)
+            self.cfg_parser.set(section, option, str(value))
+            self.update_cfg = True
+        self.__setattr__(option, value)
 
 
 class Renderer:
@@ -249,7 +309,10 @@ class ACData:
         self.ffb = 0
         self.focused_car = 0
         self.replay_time_multiplier = 1
+
+        # Normalized steering for steering trace
         self.steering_normalized = 0.5
+        self.steering_cap = cfg.trace_steering_cap * math.pi / 180
 
         self.use_kmh = cfg.use_kmh
 
@@ -273,7 +336,6 @@ class ACData:
             self.steering = ac.getCarState(self.focused_car, acsys.CS.Steer) * math.pi / 180
             self.gear = ac.getCarState(self.focused_car, acsys.CS.Gear)
 
-            # Add logic from cfg to select between MPH and KM/H
             if self.use_kmh:
                 self.speed = ac.getCarState(self.focused_car, acsys.CS.SpeedKMH)
             else:
@@ -281,7 +343,7 @@ class ACData:
 
             self.replay_time_multiplier = info.graphics.replayTimeMultiplier
 
-            self.steering_normalized = 0.5 - (self.steering / (2 * 3.14))
+            self.steering_normalized = 0.5 - (self.steering / (2 * self.trace_max_steering_angle))
             if self.steering_normalized > 1:
                 self.steering_normalized = 1
             elif self.steering_normalized < 0:
@@ -297,12 +359,12 @@ class Trace:
             color (tuple): r,g,b,a on 0 to 1 scale
         """
         # Initialize double ended queue...
-        self.time_window = cfg.time_window
-        self.sample_rate = cfg.traces_sample_rate
+        self.time_window = cfg.trace_time_window
+        self.sample_rate = cfg.trace_sample_rate
         self.sample_size = self.time_window * self.sample_rate
 
         self.color = color
-        self.thickness = cfg.traces_thickness
+        self.thickness = cfg.trace_thickness
         self.half_thickness = self.thickness / 2
 
         self.graph_origin = Point(
@@ -310,7 +372,6 @@ class Trace:
             cfg.app_height * (1 - cfg.app_padding) - self.half_thickness)
         self.graph_height = cfg.app_height * (1 - 2 * cfg.app_padding) - self.thickness
         self.graph_width = cfg.app_height * 2.5 - self.thickness
-        # self.trace_thickness = 1 # TODO DEPRECATED
 
         # TODO DEPRECATED ? 
         self.update_timer = 0
@@ -325,7 +386,6 @@ class Trace:
         self.points = deque(maxlen=2)
 
     def update(self, data_point):
-        # ALTERNATIVE ATTEMPT, MORE EFFICIENT
         if ac_data.replay_time_multiplier > 0:
             # Update traces if sim time multiplier is positive
 
@@ -412,7 +472,6 @@ class Trace:
                 ac.glEnd()
         except Exception as e:
             ac.log("{app_name} - Error: \n{error}".format(app_name=cfg.app_name, error=e))
-
 
 
 class PedalBar:
