@@ -59,37 +59,39 @@ INITIALIZED = False
 
 
 def acMain(ac_version):
-    """Run upon startup of Assetto Corsa. """
+    """Run upon startup of Assetto Corsa."""
     # Config should be first thing to load in AcMain.
     global cfg
     cfg = Config(config_file_path)
 
+    # Initialize ac_data object
     global ac_data
     ac_data = ACData()
 
-    # list of trace objects
-    global traces_list
-    global throttle_trace, brake_trace, clutch_trace
-    # TODO ORDER THEM IN REVERSE ORDER OF IMPORTANCE. LAST ONE IS DRAWN ON TOP
     # Initialize trace objects
+    global traces_list
+    global throttle_trace, brake_trace, clutch_trace, steering_trace
+    if cfg.display_steering:
+        steering_trace = Trace(Colors.grey)
+        traces_list.append(steering_trace)
+    if cfg.display_clutch:
+        clutch_trace = Trace(Colors.blue)
+        traces_list.append(clutch_trace)
     if cfg.display_throttle:
         throttle_trace = Trace(Colors.green)
         traces_list.append(throttle_trace)
     if cfg.display_brake:
         brake_trace = Trace(Colors.red)
         traces_list.append(brake_trace)
-    if cfg.display_clutch:
-        clutch_trace = Trace(Colors.blue)
-        traces_list.append(clutch_trace)
-    # Add steering...
 
-    # Initialize pedal bars.
+    # Initialize pedal bars objects
     global throttle_bar, brake_bar, clutch_bar, ffb_bar
     throttle_bar = PedalBar(1555, Colors.green)
     brake_bar = PedalBar(1480, Colors.red)
     clutch_bar = PedalBar(1405, Colors.blue)
     ffb_bar = PedalBar(1630, Colors.grey)
 
+    # Initialize wheel indicator objects
     global wheel_indicator
     wheel_indicator = SteeringWheel(Colors.yellow)
 
@@ -108,7 +110,7 @@ def acUpdate(deltaT):
         return
     global ac_data
     global traces_list
-    # Update data
+    # Update data (Shouldnt do this every tick.., also probably dont need global ac_data or global traces_list ? 
     ac_data.update(deltaT)
 
     global timer1, timer2
@@ -118,20 +120,29 @@ def acUpdate(deltaT):
     if timer1 > (1 / cfg.traces_sample_rate):
         timer1 -= (1 / cfg.traces_sample_rate)
 
-        global throttle_trace, brake_trace, clutch_trace
-        # NOT SURE IF GLOBAL THING IS NEEDED ON THIS...
-        if cfg.display_throttle:
-            throttle_trace.update2(ac_data.throttle)
-        if cfg.display_brake:
-            brake_trace.update2(ac_data.brake)
         if cfg.display_clutch:
-            clutch_trace.update2(ac_data.clutch)
+            clutch_trace.update(ac_data.clutch)
+        if cfg.display_steering:
+            steering_trace.update(ac_data.steering_normalized)
+        if cfg.display_throttle:
+            throttle_trace.update(ac_data.throttle)
+        if cfg.display_brake:
+            brake_trace.update(ac_data.brake)
 
     if timer2 > (1 / 60):
         timer2  -= 1 / 60
-        global wheel_indicator
         wheel_indicator.update(ac_data.steering)
+        throttle_bar.update(ac_data.throttle)
+        brake_bar.update(ac_data.brake)
+        clutch_bar.update(ac_data.clutch)
 
+        if ac_data.ffb < 1:
+            ffb_bar.color = Colors.grey
+            ffb_bar.update(ac_data.ffb)
+        else:
+            ffb_bar.color = Colors.red
+            ffb_bar.update(1)
+        
 
 # GL Drawing
 def app_render(deltaT):
@@ -175,7 +186,7 @@ class Config:
             self.display_brake = parser.getboolean('TRACES', 'display_brake')
             self.display_clutch = parser.getboolean('TRACES','display_clutch')
             self.display_steering = parser.getboolean('TRACES', 'display_steering')
-            # TODO add all other config items
+            self.traces_thickness = parser.getfloat('TRACES', 'thickness')
 
         except Exception as e:
             ac.log("{app_name} - Error loading config:\n{error}".format(app_name=self.app_name, error=e))
@@ -211,29 +222,17 @@ class Renderer:
         # Therefore, opacity needs to be set to 0 every frame.
         ac.setBackgroundOpacity(self.id, 0)
 
-        # ik denk dat dit werkt?
-        # Ik kan dit beter verpakken in het Trace object... 
-        # Dat maakt de implementatie van LightweightMode makkelijker.
+        # Draw traces
         for trace in traces_list:
-            set_color(trace.color)
-            for quad in trace.render_queue:
-                ac.glBegin(acsys.GL.Quads)
-                ac.glVertex2f(quad.points[0].x, quad.points[0].y)
-                ac.glVertex2f(quad.points[1].x, quad.points[1].y)
-                ac.glVertex2f(quad.points[2].x, quad.points[2].y)
-                ac.glVertex2f(quad.points[3].x, quad.points[3].y)
-                ac.glEnd()
+            trace.draw()
 
         # Draw pedal bars
-        throttle_bar.draw(ac_data.throttle)
-        brake_bar.draw(ac_data.brake)
-        clutch_bar.draw(ac_data.clutch)
+        throttle_bar.draw()
+        brake_bar.draw()
+        clutch_bar.draw()
+        ffb_bar.draw()
 
-        if ac_data.ffb < 1:
-            ffb_bar.draw(ac_data.ffb)
-        else:
-            ffb_bar.draw(1, Colors.red)
-
+        # Draw wheel
         wheel_indicator.draw()
 
 
@@ -250,6 +249,7 @@ class ACData:
         self.ffb = 0
         self.focused_car = 0
         self.replay_time_multiplier = 1
+        self.steering_normalized = 0.5
 
         self.use_kmh = cfg.use_kmh
 
@@ -281,6 +281,12 @@ class ACData:
 
             self.replay_time_multiplier = info.graphics.replayTimeMultiplier
 
+            self.steering_normalized = 0.5 - (self.steering / (2 * 3.14))
+            if self.steering_normalized > 1:
+                self.steering_normalized = 1
+            elif self.steering_normalized < 0:
+                self.steering_normalized = 0
+
 
 class Trace:
     """Trace Object..."""
@@ -291,23 +297,22 @@ class Trace:
             color (tuple): r,g,b,a on 0 to 1 scale
         """
         # Initialize double ended queue...
-        # TODO change to grab this from config
         self.time_window = cfg.time_window
         self.sample_rate = cfg.traces_sample_rate
         self.sample_size = self.time_window * self.sample_rate
-        # self.data = deque([0] * self.sample_size, self.sample_size)
 
         self.color = color
-        self.thickness = 3
+        self.thickness = cfg.traces_thickness
         self.half_thickness = self.thickness / 2
 
         self.graph_origin = Point(
-            cfg.app_height * cfg.app_padding,
-            cfg.app_height * (1- cfg.app_padding))
-        self.graph_height = cfg.app_height * (1 - 2 * cfg.app_padding)
-        self.graph_width = cfg.app_height * 2.5
-        self.trace_thickness = 1 # TODO DEPRECATED
+            cfg.app_height * cfg.app_padding + self.half_thickness,
+            cfg.app_height * (1 - cfg.app_padding) - self.half_thickness)
+        self.graph_height = cfg.app_height * (1 - 2 * cfg.app_padding) - self.thickness
+        self.graph_width = cfg.app_height * 2.5 - self.thickness
+        # self.trace_thickness = 1 # TODO DEPRECATED
 
+        # TODO DEPRECATED ? 
         self.update_timer = 0
         self.update_timer_period = 1 / self.sample_rate
 
@@ -317,48 +322,16 @@ class Trace:
 
         #USE CLEAR METHODS!!!
         self.render_queue = deque(maxlen=(2 * self.sample_size - 1))
-
         self.points = deque(maxlen=2)
 
-    # TODO DEPRECATED: This is the old and inefficient way of building the render queue.
-    def update(self, deltaT, new_data_point):
-        # Update timer
-        self.update_timer += deltaT
-
-        if self.update_timer > self.update_timer_period:
-            self.update_timer -= self.update_timer_period
-
-            if ac_data.replay_time_multiplier > 0:
-                # Update traces if sim time multiplier is positive
-                self.data.append(new_data_point)
-            elif ac_data.replay_time_multiplier == 0:
-                # If sim time is paused, dont update traces, freeze.
-                pass
-            else:
-                # If sim time multiplier is negative, clear traces to empty defaults
-                self.data.extend([0] * self.sample_size)
-
-            self.points = []
-
-            for i, val in enumerate(self.data):
-                p = Point(self.graph_origin.x 
-                          + (self.graph_width * (i + 1) / self.sample_size),
-                          self.graph_origin.y
-                          - (val * self.graph_height))
-
-                self.points.append(p.copy())
-
-            self._render_queue = build_line_render_queue(self.points, self.thickness)
-            self.render_queue = self._render_queue
-
-    def update2(self, data_point):
+    def update(self, data_point):
         # ALTERNATIVE ATTEMPT, MORE EFFICIENT
         if ac_data.replay_time_multiplier > 0:
             # Update traces if sim time multiplier is positive
 
             # Offset all current points by one
             for point in self.points:
-                point.x -= self.graph_width / self.sample_size
+                point.x -= self.graph_width / (self.sample_size - 1)
 
             # Move all quads one slot to the left. 
             # Actually.... renderqueue is really the only place I need a
@@ -366,28 +339,16 @@ class Trace:
             # I don't need a big one for the points or data. For the data only need two.
             # ALSO!!!!! Using deques is actually smart for getting lag variables
             for quad in self.render_queue:
-                quad.points[0].x -= self.graph_width / self.sample_size
-                quad.points[1].x -= self.graph_width / self.sample_size
-                quad.points[2].x -= self.graph_width / self.sample_size
-                quad.points[3].x -= self.graph_width / self.sample_size
+                quad.points[0].x -= self.graph_width / (self.sample_size - 1)
+                quad.points[1].x -= self.graph_width / (self.sample_size - 1)
+                quad.points[2].x -= self.graph_width / (self.sample_size - 1)
+                quad.points[3].x -= self.graph_width / (self.sample_size - 1)
 
             # Add new point
             p = Point(self.graph_origin.x + self.graph_width,
                     self.graph_origin.y
                     - (data_point * self.graph_height))
             self.points.append(p.copy())
-
-            # Make a square
-            p1 = Point(p.x - self.half_thickness,
-                       p.y - self.half_thickness)
-            p2 = Point(p.x + self.half_thickness,
-                       p.y - self.half_thickness)
-            p3 = Point(p.x + self.half_thickness,
-                       p.y + self.half_thickness)
-            p4 = Point(p.x - self.half_thickness,
-                       p.y + self.half_thickness)
-            square = Quad(p1, p2, p3, p4)
-            self.render_queue.append(square.copy())
 
             p_lag = self.points[0]
             # Make connecting quad if previous point exists
@@ -404,7 +365,7 @@ class Trace:
                            p.y + self.half_thickness)
                 p4 = Point(p_lag.x - self.half_thickness,
                            p_lag.y + self.half_thickness)
-                conn_quad = Quad(p1, p2, p3, p4)
+                conn_quad = Quad(p4, p3, p2, p1)
                 self.render_queue.append(conn_quad.copy())
             else:
                 p1 = Point(p_lag.x - self.half_thickness,
@@ -415,8 +376,20 @@ class Trace:
                            p.y + self.half_thickness)
                 p4 = Point(p_lag.x + self.half_thickness,
                            p_lag.y + self.half_thickness)
-                conn_quad = Quad(p1, p2, p3, p4)
+                conn_quad = Quad(p4, p3, p2, p1)
                 self.render_queue.append(conn_quad.copy())
+
+            # Make a square
+            p1 = Point(p.x - self.half_thickness,
+                       p.y - self.half_thickness)
+            p2 = Point(p.x + self.half_thickness,
+                       p.y - self.half_thickness)
+            p3 = Point(p.x + self.half_thickness,
+                       p.y + self.half_thickness)
+            p4 = Point(p.x - self.half_thickness,
+                       p.y + self.half_thickness)
+            square = Quad(p4, p3, p2, p1)
+            self.render_queue.append(square.copy())
 
         elif ac_data.replay_time_multiplier == 0:
             # If sim time is paused, dont update traces, freeze.
@@ -424,9 +397,23 @@ class Trace:
         else:
             # If sim time multiplier is negative, clear traces to empty defaults
             # SHOULD JUST CLEAR RENDER QUEUE!!!
-            self.points = deque(maxlen=2)
-            self.render_queue = deque(maxlen=(2 * self.sample_size - 1))
+            self.points.clear()
+            self.render_queue.clear()
             
+    def draw(self):
+        set_color(self.color)
+        try:
+            for quad in self.render_queue:
+                ac.glBegin(acsys.GL.Quads)
+                ac.glVertex2f(quad.points[0].x, quad.points[0].y)
+                ac.glVertex2f(quad.points[1].x, quad.points[1].y)
+                ac.glVertex2f(quad.points[2].x, quad.points[2].y)
+                ac.glVertex2f(quad.points[3].x, quad.points[3].y)
+                ac.glEnd()
+        except Exception as e:
+            ac.log("{app_name} - Error: \n{error}".format(app_name=cfg.app_name, error=e))
+
+
 
 class PedalBar:
     """DOCSTRING HERE
@@ -434,22 +421,30 @@ class PedalBar:
     """
     def __init__(self, origin_x, color):
         self.color = color
+
         self.origin = Point(origin_x * cfg.app_scale,
                             450 * cfg.app_scale)
         self.width = cfg.app_height * cfg.app_padding
         # Height will be multiplied by pedal input.
-        self.full_height = - cfg.app_height * (1- (cfg.app_padding * 2))
+        self.full_height = cfg.app_height * (1- (cfg.app_padding * 2))
 
-    def draw(self, pedal_input, color_override=None):
-        if color_override is None:
-            set_color(self.color)
-        else:
-            set_color(color_override)
+        self.pedal_input = 0
 
-        ac.glQuad(self.origin.x, 
-                  self.origin.y, 
-                  self.width, 
-                  self.full_height * pedal_input)
+    def update(self, pedal_input):
+        self.pedal_input = pedal_input
+
+    def draw(self):
+        set_color(self.color)
+        ac.glBegin(acsys.GL.Quads)
+        ac.glVertex2f(self.origin.x, 
+                      self.origin.y)
+        ac.glVertex2f(self.origin.x + self.width,
+                      self.origin.y)
+        ac.glVertex2f(self.origin.x + self.width,
+                      self.origin.y - (self.full_height * self.pedal_input))
+        ac.glVertex2f(self.origin.x,
+                      self.origin.y - (self.full_height * self.pedal_input))
+        ac.glEnd()
 
 
 class SteeringWheel:
@@ -512,65 +507,6 @@ class SteeringWheel:
             ac.glVertex2f(quad.points[2].x, quad.points[2].y)
             ac.glVertex2f(quad.points[3].x, quad.points[3].y)
             ac.glEnd()
-
-
-# TODO DEPRECATED
-def build_line_render_queue(points, thickness):
-    """Build list of quads render queue for line with specified thickness.
-    
-    Args:
-        points (list[obj:Point]): List of Point objects
-        thickness (float): Line thickness in pixels
-
-    Return:
-        list[obj:Quad]: list of Quad objects
-    """
-    half_width = thickness / 2
-
-    # Initialize render queue
-    render_queue = []
-
-    for i, p in enumerate(points):
-        # Make a square
-        p1 = Point(p.x - half_width,
-                   p.y - half_width)
-        p2 = Point(p.x + half_width,
-                   p.y - half_width)
-        p3 = Point(p.x + half_width,
-                   p.y + half_width)
-        p4 = Point(p.x - half_width,
-                   p.y + half_width)
-        square = Quad(p1, p2, p3, p4)
-        render_queue.append(square.copy())
-        
-        p_lag = points[i-1]
-        if i == 0:
-            pass
-        elif (p.x > p_lag.x) == (p.y > p_lag.y):
-            # If x and y are both greater or smaller than lag x and y
-            p1 = Point(p_lag.x + half_width,
-                       p_lag.y - half_width)
-            p2 = Point(p.x + half_width,
-                       p.y - half_width)
-            p3 = Point(p.x - half_width,
-                       p.y + half_width)
-            p4 = Point(p_lag.x - half_width,
-                       p_lag.y + half_width)
-            conn_quad = Quad(p1, p2, p3, p4)
-            render_queue.append(conn_quad.copy())
-        else:
-            p1 = Point(p_lag.x - half_width,
-                       p_lag.y - half_width)
-            p2 = Point(p.x - half_width,
-                       p.y - half_width)
-            p3 = Point(p.x + half_width,
-                       p.y + half_width)
-            p4 = Point(p_lag.x + half_width,
-                       p_lag.y + half_width)
-            conn_quad = Quad(p1, p2, p3, p4)
-            render_queue.append(conn_quad.copy())
-
-    return render_queue
 
 
 class Colors:
