@@ -60,6 +60,9 @@ wheel_indicator = None
 
 INITIALIZED = False 
 
+label_speed = 0
+label_gear = 0
+
 
 def acMain(ac_version):
     """Run upon startup of Assetto Corsa."""
@@ -102,6 +105,29 @@ def acMain(ac_version):
     global app_window
     app_window = Renderer()
 
+    ac.initFont(0, 'ACRoboto500', 0, 0)
+    ac.initFont(0, 'ACRoboto900', 0, 0)
+
+    # Set up labels
+    global label_speed, label_gear
+    label_speed = ACLabel(app_window.id, 
+                          Point(1935 * cfg.app_scale, 
+                                cfg.app_padding * cfg.app_height - 9 * cfg.app_scale),
+                          font='ACRoboto500',
+                          size=60 * cfg.app_scale,
+                          alignment='center')
+    if cfg.use_kmh:
+        label_speed.set_postfix(" km/h")
+    else:
+        label_speed.set_postfix(" mph")
+
+    label_gear = ACLabel(app_window.id,
+                         Point(1935 * cfg.app_scale,
+                               203 * cfg.app_scale),
+                         font='ACRoboto900',
+                         size= 150 * cfg.app_scale,
+                         alignment='center')
+
     global INITIALIZED
     INITIALIZED = True
 
@@ -120,8 +146,8 @@ def acUpdate(deltaT):
 
     timer1 += deltaT
     timer2 += deltaT
-    if timer1 > (1 / cfg.traces_sample_rate):
-        timer1 -= (1 / cfg.traces_sample_rate)
+    if timer1 > (1 / cfg.trace_sample_rate):
+        timer1 -= (1 / cfg.trace_sample_rate)
 
         if cfg.display_clutch:
             clutch_trace.update(ac_data.clutch)
@@ -145,7 +171,11 @@ def acUpdate(deltaT):
         else:
             ffb_bar.color = Colors.red
             ffb_bar.update(1)
-        
+
+        label_speed.set_text("{:.0f}".format(ac_data.speed))
+        label_gear.set_text("{}".format(ac_data.gear_text))
+
+
 
 # GL Drawing
 def app_render(deltaT):
@@ -153,7 +183,11 @@ def app_render(deltaT):
     app_window.render(deltaT)
 
 # TODO acShutdown function. For Saving CFG.
-
+def acShutdown():
+    # TEMP
+    ac.log("Traces: Preparing for shutdown...")
+    if cfg.update_cfg:
+        cfg.save()
 
 class Config:
     """Handling of config information"""
@@ -215,7 +249,8 @@ class Config:
 
 
     def save(self):
-        # TODO SAVE FUNCTION. CALL ON ACSHUTDOWN.
+        # TEMP
+        ac.log("Traces: Saving Config...")
         with open(self.cfg_file_path, 'w') as cfgfile:
             self.cfg_parser.write(cfgfile)
 
@@ -314,6 +349,9 @@ class ACData:
         self.steering_normalized = 0.5
         self.steering_cap = cfg.trace_steering_cap * math.pi / 180
 
+        # Gear text for use as label.
+        self.gear_text = "N"
+
         self.use_kmh = cfg.use_kmh
 
         # Timer
@@ -343,11 +381,19 @@ class ACData:
 
             self.replay_time_multiplier = info.graphics.replayTimeMultiplier
 
-            self.steering_normalized = 0.5 - (self.steering / (2 * self.trace_max_steering_angle))
+            self.steering_normalized = 0.5 - (self.steering / (2 * self.steering_cap))
             if self.steering_normalized > 1:
                 self.steering_normalized = 1
             elif self.steering_normalized < 0:
                 self.steering_normalized = 0
+
+            # Set up gear label
+            if self.gear == 0:
+                self.gear_text = "R"
+            elif self.gear == 1:
+                self.gear_text = "N"
+            else:
+                self.gear_text = str(self.gear - 1)
 
 
 class Trace:
@@ -584,3 +630,68 @@ def set_color(rgba):
         rgba (tuple): r,g,b,a on a 0-1 scale.
     """
     ac.glColor4f(rgba[0], rgba[1], rgba[2], rgba[3])
+
+
+class ACLabel:
+    def __init__(self, window_id, position, text=" ", font=None, italic=0, size=None, color=None, alignment='left', prefix="", postfix=""):
+        """Initialize Assetto Corsa text label.
+
+        Args:
+            window_id (obj:Renderer.id):
+            position (obj:Point):
+            text (str):
+            font (str): Custom font name
+            italics (0, 1): 1 for italics, 0 for regular.
+            color (tuple): r,g,b,a on a 0-1 scale.
+            size (int): Font size.
+            alignment (str): "left", "center", "right"
+            prefix (str): Prefix before main text.
+            postfix (str): Postfix after main text.
+        """
+        # Create label
+        self.id = ac.addLabel(window_id, text)
+        # Set position
+        self.set_position(position)
+
+        if font is not None: 
+            self.set_custom_font(font, italic)
+        if size is not None: 
+            self.set_font_size(size)
+        if color is not None: 
+            self.set_color(color)
+
+        self.set_alignment(alignment)
+
+        self.prefix = prefix
+        self.postfix = postfix
+        self.set_text(text)
+
+    def set_position(self, position):
+        ac.setPosition(self.id, position.x, position.y)
+
+    def set_prefix(self, prefix):
+        self.prefix = prefix
+
+    def set_postfix(self, postfix):
+        self.postfix = postfix
+
+    def set_text(self, text):
+        text = self.prefix + text + self.postfix
+        ac.setText(self.id, text)
+
+    def set_alignment(self, alignment='left'):
+        ac.setFontAlignment(self.id, alignment)
+
+    def set_font_size(self, size):
+        ac.setFontSize(self.id, size)
+
+    def set_custom_font(self, font, italic=0):
+        ac.setCustomFont(self.id, font, italic, 0)
+
+    def set_color(self, color):
+        """Set Color for Label.
+
+        Args:
+            color (tuple): r,g,b,a on a 0-1 scale.
+        """
+        ac.setFontColor(self.id, color[0], color[1], color[2], color[3])
