@@ -105,16 +105,16 @@ def acMain(ac_version):
     global app_window
     app_window = Renderer()
 
-    ac.initFont(0, 'ACRoboto500', 0, 0)
-    ac.initFont(0, 'ACRoboto900', 0, 0)
+    ac.initFont(0, 'ACRoboto300', 0, 0)
+    ac.initFont(0, 'ACRoboto700', 0, 0)
 
     # Set up labels
     global label_speed, label_gear
     label_speed = ACLabel(app_window.id, 
                           Point(1935 * cfg.app_scale, 
-                                cfg.app_padding * cfg.app_height - 9 * cfg.app_scale),
-                          font='ACRoboto500',
-                          size=60 * cfg.app_scale,
+                                cfg.app_padding * cfg.app_height - ((1/3) * 50 * cfg.app_scale)),
+                          font='ACRoboto300',
+                          size=50 * 1.4 * cfg.app_scale,
                           alignment='center')
     if cfg.use_kmh:
         label_speed.set_postfix(" km/h")
@@ -123,9 +123,9 @@ def acMain(ac_version):
 
     label_gear = ACLabel(app_window.id,
                          Point(1935 * cfg.app_scale,
-                               203 * cfg.app_scale),
-                         font='ACRoboto900',
-                         size= 150 * cfg.app_scale,
+                               (300 - 112) * cfg.app_scale),
+                         font='ACRoboto700',
+                         size= 224 * 0.84 * cfg.app_scale,
                          alignment='center')
 
     global INITIALIZED
@@ -202,8 +202,8 @@ class Config:
         self.cfg_file_path = cfg_file_path
         self.defaults_file_path = defaults_file_path
 
-        # Set app attributes that are non-configurable by user, therefore
-        # don't appear in config file.
+        # Set app attributes that are non-configurable by user, 
+        # which therefore don't appear in the config file.
         self.app_name = "Traces"
         self.app_aspect_ratio = 4.27
         self.app_padding = 0.1 # Fraction of app height
@@ -226,7 +226,7 @@ class Config:
             if not self.cfg_parser.has_section(section):
                 self.cfg_parser.add_section(section)
                 
-
+        # Load attributes from config
         self.getint('GENERAL', 'app_height')
         self.getbool('GENERAL', 'use_kmh')
 
@@ -239,14 +239,14 @@ class Config:
         self.getfloat('TRACES', 'trace_thickness')
         self.getfloat('TRACES', 'trace_steering_cap')
 
-        # If update_cfg has been triggered (set to True), run save to update file.
-        if self.update_cfg:
-            self.save()
-
         # Generate attributes derived from config inputs
         self.app_width = self.app_height * self.app_aspect_ratio
         self.app_scale = self.app_height / 500
 
+        # If update_cfg has been triggered (set to True), run save to update file.
+        if self.update_cfg:
+            self.save()
+        
 
     def save(self):
         # TEMP
@@ -683,6 +683,8 @@ class ACLabel:
         ac.setFontAlignment(self.id, alignment)
 
     def set_font_size(self, size):
+        """KUNOS FONTSIZE IS IN PIXELS, NOT PT.
+        Therefore, vertically it appears to scale linearly..."""
         ac.setFontSize(self.id, size)
 
     def set_custom_font(self, font, italic=0):
