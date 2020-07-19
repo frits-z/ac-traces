@@ -19,7 +19,7 @@ if platform.architecture()[0] == "64bit":
     sysdir = 'apps/python/traces/dll/stdlib64'
 else:
     sysdir = 'apps/python/traces/dll/stdlib'
-
+# Python looks in sys.path for modules to load.
 sys.path.insert(0, sysdir)
 os.environ['PATH'] = os.environ['PATH'] + ";."
 
@@ -110,23 +110,16 @@ def acMain(ac_version):
 
     # Set up labels
     global label_speed, label_gear
-    label_speed = ACLabel(app_window.id, 
-                          Point(1935 * cfg.app_scale, 
-                                cfg.app_padding * cfg.app_height - ((1/3) * 50 * cfg.app_scale)),
-                          font='ACRoboto300',
-                          size=50 * 1.4 * cfg.app_scale,
-                          alignment='center')
+    label_speed = ACLabel(app_window.id, font='ACRoboto300', alignment='center')
+    label_speed.fill_height(Point(1935 * cfg.app_scale, cfg.app_padding * cfg.app_height), 50 * cfg.app_scale)
+
     if cfg.use_kmh:
         label_speed.set_postfix(" km/h")
     else:
         label_speed.set_postfix(" mph")
 
-    label_gear = ACLabel(app_window.id,
-                         Point(1935 * cfg.app_scale,
-                               (300 - 112) * cfg.app_scale),
-                         font='ACRoboto700',
-                         size= 224 * 0.84 * cfg.app_scale,
-                         alignment='center')
+    label_gear = ACLabel(app_window.id, font='ACRoboto700', alignment='center')
+    label_gear.fit_height(Point(1935 * cfg.app_scale, (300 - 112) * cfg.app_scale), 224 * cfg.app_scale)
 
     global INITIALIZED
     INITIALIZED = True
@@ -633,12 +626,13 @@ def set_color(rgba):
 
 
 class ACLabel:
-    def __init__(self, window_id, position, text=" ", font=None, italic=0, size=None, color=None, alignment='left', prefix="", postfix=""):
+    def __init__(self, window_id, position=Point(), text=" ", font=None, italic=0, size=None, color=None, alignment='left', prefix="", postfix=""):
         """Initialize Assetto Corsa text label.
 
         Args:
             window_id (obj:Renderer.id):
-            position (obj:Point):
+            position (obj:Point): Set x, y positon of label by passing a Point object.
+                Optional. Defaults to 0, 0.
             text (str):
             font (str): Custom font name
             italics (0, 1): 1 for italics, 0 for regular.
@@ -649,10 +643,16 @@ class ACLabel:
             postfix (str): Postfix after main text.
         """
         # Create label
-        self.id = ac.addLabel(window_id, text)
+        self.id = ac.addLabel(window_id, "")
         # Set position
         self.set_position(position)
-
+        # Set text
+        self.prefix = prefix
+        self.postfix = postfix
+        self.set_text(text)
+        # Set alignment
+        self.set_alignment(alignment)
+        # Optional items
         if font is not None: 
             self.set_custom_font(font, italic)
         if size is not None: 
@@ -660,11 +660,23 @@ class ACLabel:
         if color is not None: 
             self.set_color(color)
 
-        self.set_alignment(alignment)
 
-        self.prefix = prefix
-        self.postfix = postfix
-        self.set_text(text)
+    def fill_height(self, position, height):
+        """Based on the Roboto font family."""
+        # Calculate font size based on box height
+        font_size = 1.4 * height
+        # Adjust y pos. 
+        position.y -= (1/3) * height
+        self.set_font_size(font_size)
+        self.set_position(position)
+
+    def fit_height(self, position, height):
+        """Based on Roboto font family."""
+        # Calculate font size based on box height
+        font_size = 0.84 * height
+        # No need to make adjustment to position.
+        self.set_font_size(font_size)
+        self.set_position(position)
 
     def set_position(self, position):
         ac.setPosition(self.id, position.x, position.y)
