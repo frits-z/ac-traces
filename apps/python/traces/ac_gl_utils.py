@@ -7,6 +7,12 @@ class Point:
     """A point in a 2D cartesian coordinate system.
     
     Each point is described by an X and a Y coordinate.
+
+    Args:
+        x (float): x coordinate.
+            optional, defaults to 0
+        y (float): y coordinate.
+            optional, defaults to 0
     """
     def __init__(self, x=0, y=0):
         self.x = float(x)
@@ -141,14 +147,12 @@ class Line:
     """A line in a 2D cartesian coordinate system.
     
     Each line is described by a set of two points.
+
+    Args:
+        p1 (obj:Point): Start point of the line.
+        p2 (obj:Point): End point of the line.
     """
     def __init__(self, p1=Point(), p2=Point()):
-        """Create Line object.
-
-        Args:
-            p1 (obj:Point): Start point of the line.
-            p2 (obj:Point): End point of the line.
-        """
         self.points = [p1, p2]
 
     def add(self, p):
@@ -243,18 +247,16 @@ class Triangle:
     """A triangle in a 2D cartesian coordinate system.
 
     Each triangle is described by a set of three points.
+
+    Args:
+        p1 (obj:Point): First point of Triangle.
+        p2 (obj:Point): Second point of Triangle.
+        p3 (obj:Point): Third point of Triangle.
     """
     def __init__(self, 
                  p1=Point(), 
                  p2=Point(), 
                  p3=Point()):
-        """Create Triangle object.
-
-        Args:
-            p1 (obj:Point): First point of Triangle.
-            p2 (obj:Point): Second point of Triangle.
-            p3 (obj:Point): Third point of Triangle.
-        """
         self.points = [p1, p2, p3]
 
     def add(self, p):
@@ -351,20 +353,18 @@ class Quad:
     """A quad in a 2D cartesian coordinate system.
 
     Each quad is described by a set of four points.
+
+    Args:
+        p1 (obj:Point): First point of Quad.
+        p2 (obj:Point): Second point of Quad.
+        p3 (obj:Point): Third point of Quad.
+        p4 (obj:Point): Fourth point of Quad
     """
     def __init__(self, 
                  p1=Point(), 
                  p2=Point(), 
                  p3=Point(),
                  p4=Point()):
-        """Create Quad object.
-
-        Args:
-            p1 (obj:Point): First point of Quad.
-            p2 (obj:Point): Second point of Quad.
-            p3 (obj:Point): Third point of Quad.
-            p4 (obj:Point): Fourth point of Quad
-        """
         self.points = [p1, p2, p3, p4]
 
     def add(self, p):
